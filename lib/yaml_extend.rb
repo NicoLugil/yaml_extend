@@ -1,4 +1,4 @@
-require 'yaml_extend/version'
+require_relative 'yaml_extend/version'
 
 require 'yaml'
 require 'deep_merge/rails_compat'
@@ -49,12 +49,19 @@ module YAML
     if inheritance_key.nil?
       inheritance_key = @@ext_load_key || DEFAULT_INHERITANCE_KEY
     end
+    tree = build_tree yaml_path, inheritance_key
+    pp tree
+    tree2order tree, :base2derived
     total_config ||= {}
     yaml_path = YAML.make_absolute_path yaml_path
     super_config = YamlExtendHelper.encode_booleans YAML.load_file(File.open(yaml_path))
     super_inheritance_files = yaml_value_by_key inheritance_key, super_config
     delete_yaml_key inheritance_key, super_config # we don't merge the super inheritance keys into the base yaml
+    puts "merging #{yaml_path} into existing config"
+    puts " source (new base)=#{super_config}"
+    puts " dest   (existing)=#{config}"
     merged_config = config.clone.deeper_merge(super_config, extend_existing_arrays: extend_existing_arrays)
+    puts "result            =#{merged_config}"
     if super_inheritance_files && super_inheritance_files != ''
       super_inheritance_files = [super_inheritance_files] unless super_inheritance_files.is_a? Array # we support strings as well as arrays of type string to extend from
       super_inheritance_files.each_with_index do |super_inheritance_file, index|
@@ -125,6 +132,45 @@ module YAML
       end
     end
     last_ref.delete key.last unless last_ref.nil?
+  end
+
+  # builds the tree from 'most derived' to the base classes
+  # used to allow doing the merge direction from base -> derived
+  # tree is a nested hash of key, values with
+  # - key = yaml path
+  # - value = array of yaml children hashes
+  def self.build_tree(yaml_path, inheritance_key=nil, tree = {})
+    if inheritance_key.nil?
+      inheritance_key = @@ext_load_key || DEFAULT_INHERITANCE_KEY
+    end
+    yaml_path = YAML.make_absolute_path yaml_path
+    tree[yaml_path]=[]
+    super_config = YAML.load_file(File.open(yaml_path))
+    super_inheritance_files = yaml_value_by_key inheritance_key, super_config
+    if super_inheritance_files && super_inheritance_files != ''
+      super_inheritance_files = [super_inheritance_files] unless super_inheritance_files.is_a? Array # we support strings as well as arrays of type string to extend from
+      super_inheritance_files.each_with_index do |super_inheritance_file, index|
+        super_config_path = File.dirname(yaml_path) + '/' + super_inheritance_file
+        tree[yaml_path]<<{}
+        YAML.build_tree(super_config_path, inheritance_key, tree[yaml_path][index])
+      end
+    end
+    return tree
+  end
+
+  # given a yaml tree, determine the order of merging
+  # order:
+  # - :base2derived
+  # more options could be possible. E.g. the default yaml_extend method could also use this
+  def self.tree2order(tree, order=:base2derived, ordered_list = [])
+    raise "only :base2derived order is supported" unless order==:base2derived
+    raise "unexpected hash size != 1" unless tree.length==1
+    this,supers = tree.first
+    ordered_list<<this
+    puts "added #{this} to list"
+    supers.each_with_index do |super_tree, index|
+      tree2order super_tree, order, ordered_list
+    end
   end
 
 end
